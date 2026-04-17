@@ -66,7 +66,7 @@ type Placement = {
 }
 
 export function prepare(_target: string): PreparedTarget {
-  throw new Error('Not implemented')
+  return createPreparedTarget(_target)
 }
 
 export function match(query: string, target: string | PreparedTarget): Match | null {
@@ -106,11 +106,40 @@ export function match(query: string, target: string | PreparedTarget): Match | n
 }
 
 export function search(
-  _query: string,
-  _targets: readonly (string | PreparedTarget)[],
-  _options?: SearchOptions,
+  query: string,
+  targets: readonly (string | PreparedTarget)[],
+  options?: SearchOptions,
 ): SearchResult<Match> {
-  throw new Error('Not implemented')
+  const limit = resolveLimit(options?.limit)
+  const threshold = resolveThreshold(options?.threshold)
+
+  if (tokenize(query).length === 0) {
+    return { items: [], total: 0 }
+  }
+
+  const ranked: Array<{ readonly index: number; readonly match: Match }> = []
+  for (let index = 0; index < targets.length; index += 1) {
+    const result = match(query, targets[index])
+    if (result === null || result.score < threshold) {
+      continue
+    }
+    ranked.push({ index, match: result })
+  }
+
+  ranked.sort((left, right) => {
+    const scoreDifference = right.match.score - left.match.score
+    if (Math.abs(scoreDifference) > EPSILON) {
+      return scoreDifference
+    }
+    return left.index - right.index
+  })
+
+  const total = ranked.length
+  const items = limit === undefined
+    ? ranked.map(entry => entry.match)
+    : ranked.slice(0, limit).map(entry => entry.match)
+
+  return { items, total }
 }
 
 export function searchBy<T>(
@@ -358,12 +387,12 @@ function scorePlacement(
   }
 
   let penalty = 1
-  penalty += start * 0.3
-  penalty += gaps * 0.4
+  penalty += start * 0.6
+  penalty += gaps * 0.8
   penalty += (ranges.length - 1) * 2
-  penalty += Math.max(0, targetLength - indices.length) * 0.05
-  penalty -= contiguousPairs * 0.5
-  penalty -= boundaryCount * 0.3
+  penalty += Math.max(0, targetLength - indices.length) * 0.2
+  penalty -= contiguousPairs * 0.2
+  penalty -= boundaryCount * 0.15
 
   return 1 / (1 + Math.max(0.01, penalty))
 }
@@ -419,4 +448,24 @@ function placementMetrics(
     coveredSpan: indices[indices.length - 1] - indices[0] + 1,
     boundaryCount,
   }
+}
+
+function resolveLimit(limit: number | undefined): number | undefined {
+  if (limit === undefined) {
+    return undefined
+  }
+  if (!Number.isInteger(limit) || limit < 0) {
+    throw new RangeError('limit must be an integer greater than or equal to 0')
+  }
+  return limit
+}
+
+function resolveThreshold(threshold: number | undefined): number {
+  if (threshold === undefined) {
+    return 0
+  }
+  if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+    throw new RangeError('threshold must be a finite number between 0 and 1')
+  }
+  return threshold
 }

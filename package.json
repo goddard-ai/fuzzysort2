@@ -5,7 +5,7 @@
   "author": "Alec Larson",
   "repository": {
     "type": "git",
-    "url": "https://github.com/aleclarson/fuzzysort2.git"
+    "url": "https://github.com/goddard-ai/fuzzysort2.git"
   },
   "files": [
     "dist",

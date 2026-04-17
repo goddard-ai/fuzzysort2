@@ -10,7 +10,8 @@
   "files": [
     "dist",
     "docs",
-    "examples"
+    "examples",
+    "!examples/tsconfig.json"
   ],
   "type": "module",
   "exports": {

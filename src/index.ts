@@ -141,21 +141,123 @@ export function search(
 }
 
 export function searchBy<T>(
-  _query: string,
-  _values: readonly T[],
-  _extract: (value: T) => string | PreparedTarget | null | undefined,
-  _options?: SearchOptions,
+  query: string,
+  values: readonly T[],
+  extract: (value: T) => string | PreparedTarget | null | undefined,
+  options?: SearchOptions,
 ): SearchResult<ValueMatch<T>> {
-  throw new Error('Not implemented')
+  const limit = resolveLimit(options?.limit)
+  const threshold = resolveThreshold(options?.threshold)
+  if (tokenize(query).length === 0) {
+    return { items: [], total: 0 }
+  }
+
+  const ranked: Array<{ readonly index: number; readonly match: ValueMatch<T> }> = []
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index]
+    const target = extract(value)
+    if (target == null) {
+      continue
+    }
+
+    const result = match(query, target)
+    if (result === null || result.score < threshold) {
+      continue
+    }
+
+    ranked.push({
+      index,
+      match: {
+        value,
+        target: result.target,
+        score: result.score,
+        ranges: result.ranges,
+      },
+    })
+  }
+
+  return finalizeSearchResult(ranked, limit)
 }
 
 export function searchFields<T>(
-  _query: string,
-  _values: readonly T[],
-  _fields: readonly FieldDefinition<T>[],
-  _options?: SearchOptions,
+  query: string,
+  values: readonly T[],
+  fields: readonly FieldDefinition<T>[],
+  options?: SearchOptions,
 ): SearchResult<RecordMatch<T>> {
-  throw new Error('Not implemented')
+  if (fields.length === 0) {
+    throw new RangeError('fields must not be empty')
+  }
+
+  const keys = new Set<string>()
+  for (const field of fields) {
+    if (field.key === '') {
+      throw new RangeError('field keys must not be empty')
+    }
+    if (keys.has(field.key)) {
+      throw new RangeError('field keys must be unique')
+    }
+    keys.add(field.key)
+  }
+
+  const limit = resolveLimit(options?.limit)
+  const threshold = resolveThreshold(options?.threshold)
+  const tokens = tokenize(query)
+  if (tokens.length === 0) {
+    return { items: [], total: 0 }
+  }
+
+  const ranked: Array<{ readonly index: number; readonly match: RecordMatch<T> }> = []
+
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index]
+    const extracted = fields.map(field => ({
+      key: field.key,
+      target: field.extract(value),
+    }))
+
+    const candidates = tokens.map(token => {
+      const tokenCandidates: Array<{ readonly fieldIndex: number; readonly match: Match }> = []
+      for (let fieldIndex = 0; fieldIndex < extracted.length; fieldIndex += 1) {
+        const target = extracted[fieldIndex]?.target
+        if (target == null) {
+          continue
+        }
+
+        const result = match(token, target)
+        if (result !== null) {
+          tokenCandidates.push({ fieldIndex, match: result })
+        }
+      }
+      return tokenCandidates
+    })
+
+    if (candidates.some(candidate => candidate.length === 0)) {
+      continue
+    }
+
+    const assignment = chooseFieldAssignment(candidates)
+    if (assignment === null) {
+      continue
+    }
+
+    const fieldMatches = buildFieldMatches(assignment, extracted)
+    const score = averageScore(assignment.map(entry => entry.match))
+    if (score < threshold) {
+      continue
+    }
+
+    ranked.push({
+      index,
+      match: {
+        value,
+        score,
+        fields: fieldMatches,
+      },
+    })
+  }
+
+  return finalizeSearchResult(ranked, limit)
 }
 
 export function segments(_match: HighlightableMatch): readonly MatchSegment[] {
@@ -450,7 +552,7 @@ function scorePlacement(
   targetLength: number,
 ): number {
   const penalty = placementPenalty(indices, ranges, boundaries, targetLength)
-  return 1 / (1 + penalty)
+  return 1 / (1 + penalty / 100)
 }
 
 function comparePlacements(
@@ -556,13 +658,127 @@ function placementPenalty(
   const nonBoundaryCount = indices.length - boundaryCount
 
   let penalty = 0
-  penalty += start * 1_000
+  penalty += start * 100
   penalty += (ranges.length - 1) * 100
   penalty += nonBoundaryCount * 10
   penalty += coveredSpan
   penalty += targetLength * 0.01
 
   return penalty
+}
+
+function finalizeSearchResult<TMatch extends { readonly score: number }>(
+  ranked: ReadonlyArray<{ readonly index: number; readonly match: TMatch }>,
+  limit: number | undefined,
+): SearchResult<TMatch> {
+  const ordered = [...ranked].sort((left, right) => {
+    const scoreDifference = right.match.score - left.match.score
+    if (Math.abs(scoreDifference) > EPSILON) {
+      return scoreDifference
+    }
+    return left.index - right.index
+  })
+
+  const total = ordered.length
+  const items = limit === undefined
+    ? ordered.map(entry => entry.match)
+    : ordered.slice(0, limit).map(entry => entry.match)
+
+  return { items, total }
+}
+
+function chooseFieldAssignment(
+  candidates: readonly (readonly { readonly fieldIndex: number; readonly match: Match }[])[],
+): ReadonlyArray<{ readonly fieldIndex: number; readonly match: Match }> | null {
+  let best: Array<{ readonly fieldIndex: number; readonly match: Match }> | null = null
+
+  const visit = (
+    tokenIndex: number,
+    chosen: Array<{ readonly fieldIndex: number; readonly match: Match }>,
+  ): void => {
+    if (tokenIndex === candidates.length) {
+      if (best === null || compareAssignments(chosen, best) > 0) {
+        best = chosen.slice()
+      }
+      return
+    }
+
+    for (const candidate of candidates[tokenIndex]!) {
+      chosen.push(candidate)
+      visit(tokenIndex + 1, chosen)
+      chosen.pop()
+    }
+  }
+
+  visit(0, [])
+  return best
+}
+
+function compareAssignments(
+  left: readonly { readonly fieldIndex: number; readonly match: Match }[],
+  right: readonly { readonly fieldIndex: number; readonly match: Match }[],
+): number {
+  const leftScore = averageScore(left.map(entry => entry.match))
+  const rightScore = averageScore(right.map(entry => entry.match))
+  if (Math.abs(leftScore - rightScore) > EPSILON) {
+    return leftScore > rightScore ? 1 : -1
+  }
+
+  const leftFieldCount = new Set(left.map(entry => entry.fieldIndex)).size
+  const rightFieldCount = new Set(right.map(entry => entry.fieldIndex)).size
+  if (leftFieldCount !== rightFieldCount) {
+    return leftFieldCount < rightFieldCount ? 1 : -1
+  }
+
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index]!.fieldIndex !== right[index]!.fieldIndex) {
+      return left[index]!.fieldIndex < right[index]!.fieldIndex ? 1 : -1
+    }
+  }
+
+  return 0
+}
+
+function buildFieldMatches<T>(
+  assignment: readonly { readonly fieldIndex: number; readonly match: Match }[],
+  extracted: readonly { readonly key: string; readonly target: string | PreparedTarget | null | undefined }[],
+): FieldMatch[] {
+  const byField = new Map<number, Match[]>()
+
+  for (const entry of assignment) {
+    const matches = byField.get(entry.fieldIndex)
+    if (matches) {
+      matches.push(entry.match)
+    } else {
+      byField.set(entry.fieldIndex, [entry.match])
+    }
+  }
+
+  const fieldMatches: FieldMatch[] = []
+  for (let fieldIndex = 0; fieldIndex < extracted.length; fieldIndex += 1) {
+    const matches = byField.get(fieldIndex)
+    if (!matches || matches.length === 0) {
+      continue
+    }
+
+    const target = matches[0]!.target
+    fieldMatches.push({
+      key: extracted[fieldIndex]!.key,
+      target,
+      ranges: mergeRanges(matches.flatMap(match => match.ranges)),
+      score: averageScore(matches),
+    })
+  }
+
+  return fieldMatches
+}
+
+function averageScore(matches: readonly { readonly score: number }[]): number {
+  let total = 0
+  for (const match of matches) {
+    total += match.score
+  }
+  return total / matches.length
 }
 
 function resolveLimit(limit: number | undefined): number | undefined {

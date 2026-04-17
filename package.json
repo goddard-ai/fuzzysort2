@@ -8,7 +8,9 @@
     "url": "https://github.com/aleclarson/fuzzysort2.git"
   },
   "files": [
-    "dist"
+    "dist",
+    "docs",
+    "examples"
   ],
   "type": "module",
   "exports": {

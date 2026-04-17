@@ -2,6 +2,7 @@
   "extends": "../tsconfig.json",
   "include": ["./"],
   "compilerOptions": {
+    "allowImportingTsExtensions": true,
     "types": ["node", "vitest/globals"]
   }
 }

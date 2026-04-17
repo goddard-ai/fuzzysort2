@@ -16,7 +16,6 @@
 - You need full-text indexing or large-dataset search.
 - You need asynchronous, remote, or streaming search.
 - You need language-aware stemming, tokenization, or relevance ranking beyond the built-in matching model.
-- You want empty queries to return all candidates. `fuzzysort2` deliberately treats empty queries as no-match.
 
 # Core Abstractions
 
@@ -36,7 +35,7 @@
 5. Batch search applies threshold filtering, stable score ordering, and optional limit truncation.
 6. The returned match ranges drive `segments(...)` and `highlight(...)`.
 
-Prepared targets are caller-owned and immutable. There is no global cache lifecycle and no cleanup API.
+Prepared targets are caller-owned and immutable.
 
 # Common Tasks -> Recommended APIs
 
@@ -76,8 +75,6 @@ Prepared targets are caller-owned and immutable. There is no global cache lifecy
 
 # Error Model
 
-`fuzzysort2` does not perform general runtime type validation for shapes already covered by TypeScript.
-
 Runtime validation is limited to semantic constraints:
 
 - invalid `limit`
@@ -101,7 +98,5 @@ These cases throw `RangeError`.
 # Non-Goals
 
 - Backward compatibility with `fuzzysort` v3 result shapes and helper methods.
-- Global caches or cleanup hooks.
 - User-provided scoring callbacks.
 - Async search or indexed search.
-- A large guide tree or tutorial-heavy documentation set.

@@ -104,6 +104,18 @@ type Placement = {
   readonly score: number
 }
 
+type PlacementMetrics = {
+  readonly start: number
+  readonly rangeCount: number
+  readonly coveredSpan: number
+  readonly boundaryCount: number
+}
+
+type FieldAssignment = {
+  readonly fieldIndex: number
+  readonly match: Match
+}
+
 /**
  * Prepare a target string for reuse across multiple searches.
  *
@@ -197,7 +209,7 @@ export function search(
     return { items: [], total: 0 }
   }
 
-  const ranked: Array<{ readonly index: number; readonly match: Match }> = []
+  const ranked: { readonly index: number; readonly match: Match }[] = []
   for (let index = 0; index < targets.length; index += 1) {
     const result = match(query, targets[index])
     if (result === null || result.score < threshold) {
@@ -250,7 +262,7 @@ export function searchBy<T>(
     return { items: [], total: 0 }
   }
 
-  const ranked: Array<{ readonly index: number; readonly match: ValueMatch<T> }> = []
+  const ranked: { readonly index: number; readonly match: ValueMatch<T> }[] = []
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index]
     const target = extract(value)
@@ -325,7 +337,7 @@ export function searchFields<T>(
     return { items: [], total: 0 }
   }
 
-  const ranked: Array<{ readonly index: number; readonly match: RecordMatch<T> }> = []
+  const ranked: { readonly index: number; readonly match: RecordMatch<T> }[] = []
 
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index]
@@ -335,7 +347,7 @@ export function searchFields<T>(
     }))
 
     const candidates = tokens.map(token => {
-      const tokenCandidates: Array<{ readonly fieldIndex: number; readonly match: Match }> = []
+      const tokenCandidates: FieldAssignment[] = []
       for (let fieldIndex = 0; fieldIndex < extracted.length; fieldIndex += 1) {
         const target = extracted[fieldIndex]?.target
         if (target == null) {
@@ -391,21 +403,21 @@ export function searchFields<T>(
  * if (result) console.log(segments(result))
  * ```
  */
-export function segments(_match: HighlightableMatch): readonly MatchSegment[] {
+export function segments(match: HighlightableMatch): readonly MatchSegment[] {
   const parts: MatchSegment[] = []
   let cursor = 0
 
-  for (const range of _match.ranges) {
+  for (const range of match.ranges) {
     if (range.start > cursor) {
-      parts.push({ text: _match.target.slice(cursor, range.start), matched: false })
+      parts.push({ text: match.target.slice(cursor, range.start), matched: false })
     }
 
-    parts.push({ text: _match.target.slice(range.start, range.end), matched: true })
+    parts.push({ text: match.target.slice(range.start, range.end), matched: true })
     cursor = range.end
   }
 
-  if (cursor < _match.target.length) {
-    parts.push({ text: _match.target.slice(cursor), matched: false })
+  if (cursor < match.target.length) {
+    parts.push({ text: match.target.slice(cursor), matched: false })
   }
 
   return parts
@@ -427,13 +439,13 @@ export function segments(_match: HighlightableMatch): readonly MatchSegment[] {
  * @remarks `highlight` does not escape HTML.
  */
 export function highlight(
-  _match: HighlightableMatch,
-  _options?: { open?: string; close?: string },
+  match: HighlightableMatch,
+  options?: { open?: string; close?: string },
 ): string {
-  const open = _options?.open ?? '<mark>'
-  const close = _options?.close ?? '</mark>'
+  const open = options?.open ?? '<mark>'
+  const close = options?.close ?? '</mark>'
 
-  return segments(_match).map(part => {
+  return segments(match).map(part => {
     if (!part.matched) {
       return part.text
     }
@@ -512,7 +524,7 @@ function removeAccents(text: string): string {
 }
 
 function computeBoundaries(target: string): boolean[] {
-  const boundaries = new Array<boolean>(target.length).fill(false)
+  const boundaries = Array.from({ length: target.length }, () => false)
   if (target.length === 0) {
     return boundaries
   }
@@ -595,7 +607,7 @@ function findBestPlacement(query: string, prepared: InternalPreparedTarget): Pla
       const score = scorePlacement(indices, ranges, prepared.boundaries, prepared.target.length)
       const placement: Placement = { indices, ranges, score }
 
-      if (best === null || comparePlacements(placement, best, prepared.boundaries, prepared.target.length) > 0) {
+      if (best === null || comparePlacements(placement, best, prepared.boundaries) > 0) {
         best = placement
       }
       return
@@ -705,14 +717,13 @@ function comparePlacements(
   left: Placement,
   right: Placement,
   boundaries: readonly boolean[],
-  targetLength: number,
 ): number {
   if (Math.abs(left.score - right.score) > EPSILON) {
     return left.score > right.score ? 1 : -1
   }
 
-  const leftMetrics = placementMetrics(left.indices, left.ranges, boundaries, targetLength)
-  const rightMetrics = placementMetrics(right.indices, right.ranges, boundaries, targetLength)
+  const leftMetrics = placementMetrics(left.indices, left.ranges, boundaries)
+  const rightMetrics = placementMetrics(right.indices, right.ranges, boundaries)
 
   if (leftMetrics.start !== rightMetrics.start) {
     return leftMetrics.start < rightMetrics.start ? 1 : -1
@@ -737,8 +748,7 @@ function placementMetrics(
   indices: readonly number[],
   ranges: readonly MatchRange[],
   boundaries: readonly boolean[],
-  _targetLength: number,
-) {
+): PlacementMetrics {
   let boundaryCount = 0
   for (const index of indices) {
     if (boundaries[index]) {
@@ -814,7 +824,7 @@ function placementPenalty(
 }
 
 function finalizeSearchResult<TMatch extends { readonly score: number }>(
-  ranked: ReadonlyArray<{ readonly index: number; readonly match: TMatch }>,
+  ranked: readonly { readonly index: number; readonly match: TMatch }[],
   limit: number | undefined,
 ): SearchResult<TMatch> {
   const ordered = [...ranked].sort((left, right) => {
@@ -834,13 +844,13 @@ function finalizeSearchResult<TMatch extends { readonly score: number }>(
 }
 
 function chooseFieldAssignment(
-  candidates: readonly (readonly { readonly fieldIndex: number; readonly match: Match }[])[],
-): ReadonlyArray<{ readonly fieldIndex: number; readonly match: Match }> | null {
-  let best: Array<{ readonly fieldIndex: number; readonly match: Match }> | null = null
+  candidates: readonly (readonly FieldAssignment[])[],
+): readonly FieldAssignment[] | null {
+  let best: FieldAssignment[] | null = null
 
   const visit = (
     tokenIndex: number,
-    chosen: Array<{ readonly fieldIndex: number; readonly match: Match }>,
+    chosen: FieldAssignment[],
   ): void => {
     if (tokenIndex === candidates.length) {
       if (best === null || compareAssignments(chosen, best) > 0) {
@@ -861,8 +871,8 @@ function chooseFieldAssignment(
 }
 
 function compareAssignments(
-  left: readonly { readonly fieldIndex: number; readonly match: Match }[],
-  right: readonly { readonly fieldIndex: number; readonly match: Match }[],
+  left: readonly FieldAssignment[],
+  right: readonly FieldAssignment[],
 ): number {
   const leftScore = averageScore(left.map(entry => entry.match))
   const rightScore = averageScore(right.map(entry => entry.match))
@@ -885,8 +895,8 @@ function compareAssignments(
   return 0
 }
 
-function buildFieldMatches<T>(
-  assignment: readonly { readonly fieldIndex: number; readonly match: Match }[],
+function buildFieldMatches(
+  assignment: readonly FieldAssignment[],
   extracted: readonly { readonly key: string; readonly target: string | PreparedTarget | null | undefined }[],
 ): FieldMatch[] {
   const byField = new Map<number, Match[]>()

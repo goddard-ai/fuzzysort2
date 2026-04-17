@@ -80,29 +80,27 @@ export function match(query: string, target: string | PreparedTarget): Match | n
     return null
   }
 
-  if (tokens.length > 1) {
-    throw new Error('Not implemented')
+  if (tokens.length === 1) {
+    return matchSingleToken(tokens[0], prepared)
   }
 
-  const token = tokens[0]
-  if (token === prepared.normalized) {
-    return {
-      target: prepared.target,
-      score: 1,
-      ranges: [{ start: 0, end: prepared.target.length }],
+  const tokenMatches: Match[] = []
+  for (const token of tokens) {
+    const result = matchSingleToken(token, prepared)
+    if (result === null) {
+      return null
     }
+    tokenMatches.push(result)
   }
 
-  const placement = findBestPlacement(token, prepared)
-  if (placement === null) {
-    return null
+  const aggregated = aggregateTokenMatches(tokenMatches)
+  const coherent = matchSingleToken(tokens.join(''), prepared)
+
+  if (coherent !== null && coherent.score > aggregated.score) {
+    return coherent
   }
 
-  return {
-    target: prepared.target,
-    score: placement.score,
-    ranges: placement.ranges,
-  }
+  return aggregated
 }
 
 export function search(
@@ -234,6 +232,27 @@ function tokenize(query: string): string[] {
     tokens.push(normalized)
   }
   return tokens
+}
+
+function matchSingleToken(query: string, prepared: InternalPreparedTarget): Match | null {
+  if (query === prepared.normalized) {
+    return {
+      target: prepared.target,
+      score: 1,
+      ranges: [{ start: 0, end: prepared.target.length }],
+    }
+  }
+
+  const placement = findBestPlacement(query, prepared)
+  if (placement === null) {
+    return null
+  }
+
+  return {
+    target: prepared.target,
+    score: placement.score,
+    ranges: placement.ranges,
+  }
 }
 
 function normalizeText(text: string): string {
@@ -392,6 +411,38 @@ function buildRanges(indices: readonly number[]): MatchRange[] {
   return ranges
 }
 
+function mergeRanges(ranges: readonly MatchRange[]): MatchRange[] {
+  if (ranges.length === 0) {
+    return []
+  }
+
+  const sorted = [...ranges].sort((left, right) => {
+    if (left.start !== right.start) {
+      return left.start - right.start
+    }
+    return left.end - right.end
+  })
+
+  const merged: MatchRange[] = []
+  let start = sorted[0].start
+  let end = sorted[0].end
+
+  for (let index = 1; index < sorted.length; index += 1) {
+    const current = sorted[index]
+    if (current.start <= end) {
+      end = Math.max(end, current.end)
+      continue
+    }
+
+    merged.push({ start, end })
+    start = current.start
+    end = current.end
+  }
+
+  merged.push({ start, end })
+  return merged
+}
+
 function scorePlacement(
   indices: readonly number[],
   ranges: readonly MatchRange[],
@@ -452,6 +503,38 @@ function placementMetrics(
     rangeCount: ranges.length,
     coveredSpan: indices[indices.length - 1] - indices[0] + 1,
     boundaryCount,
+  }
+}
+
+function aggregateTokenMatches(matches: readonly Match[]): Match {
+  const ranges = mergeRanges(matches.flatMap(match => match.ranges))
+
+  let scoreTotal = 0
+  for (const match of matches) {
+    scoreTotal += match.score
+  }
+
+  let score = scoreTotal / matches.length
+  let previousStart = -1
+  let previousEnd = -1
+
+  for (const match of matches) {
+    const start = match.ranges[0]?.start ?? 0
+    const end = match.ranges[match.ranges.length - 1]?.end ?? start
+    if (previousStart >= 0 && start < previousStart) {
+      score *= 0.5
+    }
+    if (previousEnd >= 0 && start < previousEnd) {
+      score *= 0.75
+    }
+    previousStart = start
+    previousEnd = end
+  }
+
+  return {
+    target: matches[0].target,
+    score,
+    ranges,
   }
 }
 

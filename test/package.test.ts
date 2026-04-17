@@ -24,13 +24,12 @@ describe('package surface', () => {
     expect(typeof highlight).toBe('function')
   })
 
-  it('documents the canonical public APIs in the README', () => {
+  it('keeps the README as a routing document', () => {
     const readme = readFileSync(resolve(process.cwd(), 'README.md'), 'utf8')
 
-    expect(readme).toContain("import { match } from 'fuzzysort2'")
     expect(readme).toContain("import { search } from 'fuzzysort2'")
-    expect(readme).toContain("import { searchBy } from 'fuzzysort2'")
-    expect(readme).toContain("import { searchFields } from 'fuzzysort2'")
-    expect(readme).toContain("import { prepare } from 'fuzzysort2'")
+    expect(readme).toContain('[docs/context.md](docs/context.md)')
+    expect(readme).toContain('[examples/basic-search.ts](examples/basic-search.ts)')
+    expect(readme).toContain('generated `dist/index.d.mts` after `pnpm build`')
   })
 })

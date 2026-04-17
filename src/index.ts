@@ -1,52 +1,91 @@
+/**
+ * An opaque prepared target that can be reused across searches.
+ *
+ * Prepared targets keep the original target string while hiding the normalized
+ * search metadata used internally by the matcher.
+ */
 export interface PreparedTarget {
+  /** The original target string passed to {@link prepare}. */
   readonly target: string
 }
 
+/** A half-open character span on the original target string. */
 export interface MatchRange {
+  /** The inclusive start offset of the matched span. */
   readonly start: number
+  /** The exclusive end offset of the matched span. */
   readonly end: number
 }
 
+/** One alternating text segment returned by {@link segments}. */
 export interface MatchSegment {
+  /** The segment text taken from the original target string. */
   readonly text: string
+  /** Whether this segment belongs to a matched range. */
   readonly matched: boolean
 }
 
+/**
+ * The minimum shape required by {@link segments} and {@link highlight}.
+ *
+ * Any value with a `target` string and merged `ranges` can use the helper APIs.
+ */
 export interface HighlightableMatch {
+  /** The original target string. */
   readonly target: string
+  /** Merged half-open ranges on the original target string. */
   readonly ranges: readonly MatchRange[]
 }
 
+/** A successful query-to-target match. */
 export interface Match extends HighlightableMatch {
+  /** A normalized score in the interval `(0, 1]`, where higher is better. */
   readonly score: number
 }
 
+/** A successful match that keeps the original searched value. */
 export interface ValueMatch<T> extends Match {
+  /** The original input value that produced the match. */
   readonly value: T
 }
 
+/** One named field definition used by {@link searchFields}. */
 export interface FieldDefinition<T> {
+  /** The stable field name used in returned {@link FieldMatch} values. */
   readonly key: string
+  /** Extracts a searchable string or prepared target from one value. */
   readonly extract: (value: T) => string | PreparedTarget | null | undefined
 }
 
+/** One contributing field in a {@link RecordMatch}. */
 export interface FieldMatch extends Match {
+  /** The field definition key that produced this field-level match. */
   readonly key: string
 }
 
+/** A successful multi-field record match returned by {@link searchFields}. */
 export interface RecordMatch<T> {
+  /** The original input value. */
   readonly value: T
+  /** The record-level score after token assignment across fields. */
   readonly score: number
+  /** The contributing field matches in field declaration order. */
   readonly fields: readonly FieldMatch[]
 }
 
+/** The common search result container returned by the batch search APIs. */
 export interface SearchResult<TMatch> {
+  /** The ranked matches after threshold filtering and limit truncation. */
   readonly items: readonly TMatch[]
+  /** The number of matches before limit truncation. */
   readonly total: number
 }
 
+/** Shared options for {@link search}, {@link searchBy}, and {@link searchFields}. */
 export interface SearchOptions {
+  /** Maximum number of returned items after ranking. */
   readonly limit?: number
+  /** Minimum normalized score required for a match to be returned. */
   readonly threshold?: number
 }
 
@@ -65,10 +104,38 @@ type Placement = {
   readonly score: number
 }
 
-export function prepare(_target: string): PreparedTarget {
-  return createPreparedTarget(_target)
+/**
+ * Prepare a target string for reuse across multiple searches.
+ *
+ * @param target - The original target string to prepare.
+ * @returns An opaque immutable prepared target.
+ * @example
+ * ```ts
+ * import { prepare, search } from 'fuzzysort2'
+ *
+ * const targets = [prepare('CheatManager.h'), prepare('Manifest.cpp')]
+ * const result = search('c man', targets)
+ * ```
+ * @remarks Use prepared targets when the same targets are searched repeatedly.
+ */
+export function prepare(target: string): PreparedTarget {
+  return createPreparedTarget(target)
 }
 
+/**
+ * Match one query against one string or prepared target.
+ *
+ * @param query - The user query.
+ * @param target - The target string or a prepared target.
+ * @returns A normalized match result, or `null` when the query does not match.
+ * @example
+ * ```ts
+ * import { match } from 'fuzzysort2'
+ *
+ * const result = match('cman', 'CheatManager')
+ * ```
+ * @remarks Empty queries always return `null`.
+ */
 export function match(query: string, target: string | PreparedTarget): Match | null {
   const tokens = tokenize(query)
   if (tokens.length === 0) {
@@ -103,6 +170,21 @@ export function match(query: string, target: string | PreparedTarget): Match | n
   return aggregated
 }
 
+/**
+ * Search a ranked array of strings or prepared targets.
+ *
+ * @param query - The user query.
+ * @param targets - The candidate target strings or prepared targets.
+ * @param options - Optional result limiting and threshold filtering.
+ * @returns Ranked search results with a pre-limit `total`.
+ * @throws {RangeError} When `limit` is negative or non-integer, or when `threshold` is outside `[0, 1]`.
+ * @example
+ * ```ts
+ * import { search } from 'fuzzysort2'
+ *
+ * const result = search('fuzzysort', ['FuzzySort', 'fuzzysort.cpp'], { limit: 1 })
+ * ```
+ */
 export function search(
   query: string,
   targets: readonly (string | PreparedTarget)[],
@@ -140,6 +222,22 @@ export function search(
   return { items, total }
 }
 
+/**
+ * Search one extracted target string per value.
+ *
+ * @param query - The user query.
+ * @param values - The candidate input values.
+ * @param extract - Maps one value to one searchable string or prepared target.
+ * @param options - Optional result limiting and threshold filtering.
+ * @returns Ranked matches that preserve the original input values.
+ * @throws {RangeError} When `limit` is negative or non-integer, or when `threshold` is outside `[0, 1]`.
+ * @example
+ * ```ts
+ * import { searchBy } from 'fuzzysort2'
+ *
+ * const result = searchBy('al lar', users, user => user.name)
+ * ```
+ */
 export function searchBy<T>(
   query: string,
   values: readonly T[],
@@ -179,6 +277,26 @@ export function searchBy<T>(
   return finalizeSearchResult(ranked, limit)
 }
 
+/**
+ * Search multiple named fields on each value and assign query tokens to the
+ * highest-scoring field matches.
+ *
+ * @param query - The user query.
+ * @param values - The candidate input values.
+ * @param fields - The named field definitions used for token assignment.
+ * @param options - Optional result limiting and threshold filtering.
+ * @returns Ranked record matches with contributing field matches.
+ * @throws {RangeError} When `fields` is empty, when a field key is empty, when field keys are duplicated, or when `limit` or `threshold` is invalid.
+ * @example
+ * ```ts
+ * import { searchFields } from 'fuzzysort2'
+ *
+ * const result = searchFields('c man', files, [
+ *   { key: 'name', extract: file => file.name },
+ *   { key: 'path', extract: file => file.path },
+ * ])
+ * ```
+ */
 export function searchFields<T>(
   query: string,
   values: readonly T[],
@@ -260,6 +378,19 @@ export function searchFields<T>(
   return finalizeSearchResult(ranked, limit)
 }
 
+/**
+ * Split a match into minimal alternating matched and unmatched text segments.
+ *
+ * @param match - Any value with a target string and merged match ranges.
+ * @returns Alternating text segments that reconstruct the original target.
+ * @example
+ * ```ts
+ * import { match, segments } from 'fuzzysort2'
+ *
+ * const result = match('cman', 'CheatManager')
+ * if (result) console.log(segments(result))
+ * ```
+ */
 export function segments(_match: HighlightableMatch): readonly MatchSegment[] {
   const parts: MatchSegment[] = []
   let cursor = 0
@@ -280,6 +411,21 @@ export function segments(_match: HighlightableMatch): readonly MatchSegment[] {
   return parts
 }
 
+/**
+ * Render a match by wrapping matched segments with the given delimiters.
+ *
+ * @param match - Any value with a target string and merged match ranges.
+ * @param options - Optional wrappers for matched segments.
+ * @returns The formatted string.
+ * @example
+ * ```ts
+ * import { highlight, match } from 'fuzzysort2'
+ *
+ * const result = match('cman', 'CheatManager')
+ * if (result) console.log(highlight(result, { open: '<b>', close: '</b>' }))
+ * ```
+ * @remarks `highlight` does not escape HTML.
+ */
 export function highlight(
   _match: HighlightableMatch,
   _options?: { open?: string; close?: string },

@@ -161,14 +161,38 @@ export function searchFields<T>(
 }
 
 export function segments(_match: HighlightableMatch): readonly MatchSegment[] {
-  throw new Error('Not implemented')
+  const parts: MatchSegment[] = []
+  let cursor = 0
+
+  for (const range of _match.ranges) {
+    if (range.start > cursor) {
+      parts.push({ text: _match.target.slice(cursor, range.start), matched: false })
+    }
+
+    parts.push({ text: _match.target.slice(range.start, range.end), matched: true })
+    cursor = range.end
+  }
+
+  if (cursor < _match.target.length) {
+    parts.push({ text: _match.target.slice(cursor), matched: false })
+  }
+
+  return parts
 }
 
 export function highlight(
   _match: HighlightableMatch,
   _options?: { open?: string; close?: string },
 ): string {
-  throw new Error('Not implemented')
+  const open = _options?.open ?? '<mark>'
+  const close = _options?.close ?? '</mark>'
+
+  return segments(_match).map(part => {
+    if (!part.matched) {
+      return part.text
+    }
+    return `${open}${part.text}${close}`
+  }).join('')
 }
 
 function getPreparedTarget(target: string | PreparedTarget): InternalPreparedTarget {
@@ -374,27 +398,8 @@ function scorePlacement(
   boundaries: readonly boolean[],
   targetLength: number,
 ): number {
-  const start = indices[0]
-  const coveredSpan = indices[indices.length - 1] - start + 1
-  const gaps = coveredSpan - indices.length
-  const contiguousPairs = indices.length - ranges.length
-
-  let boundaryCount = 0
-  for (const index of indices) {
-    if (boundaries[index]) {
-      boundaryCount += 1
-    }
-  }
-
-  let penalty = 1
-  penalty += start * 0.6
-  penalty += gaps * 0.8
-  penalty += (ranges.length - 1) * 2
-  penalty += Math.max(0, targetLength - indices.length) * 0.2
-  penalty -= contiguousPairs * 0.2
-  penalty -= boundaryCount * 0.15
-
-  return 1 / (1 + Math.max(0.01, penalty))
+  const penalty = placementPenalty(indices, ranges, boundaries, targetLength)
+  return 1 / (1 + penalty)
 }
 
 function comparePlacements(
@@ -448,6 +453,33 @@ function placementMetrics(
     coveredSpan: indices[indices.length - 1] - indices[0] + 1,
     boundaryCount,
   }
+}
+
+function placementPenalty(
+  indices: readonly number[],
+  ranges: readonly MatchRange[],
+  boundaries: readonly boolean[],
+  targetLength: number,
+): number {
+  let boundaryCount = 0
+  for (const index of indices) {
+    if (boundaries[index]) {
+      boundaryCount += 1
+    }
+  }
+
+  const start = indices[0]
+  const coveredSpan = indices[indices.length - 1] - start + 1
+  const nonBoundaryCount = indices.length - boundaryCount
+
+  let penalty = 0
+  penalty += start * 1_000
+  penalty += (ranges.length - 1) * 100
+  penalty += nonBoundaryCount * 10
+  penalty += coveredSpan
+  penalty += targetLength * 0.01
+
+  return penalty
 }
 
 function resolveLimit(limit: number | undefined): number | undefined {

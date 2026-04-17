@@ -337,21 +337,16 @@ if (hit) {
 
 ## Behavioral Semantics
 
-### 1. Input Validation
+### 1. Runtime Validation Policy
 
-- `prepare(...)` throws `TypeError` unless `target` is a string.
-- `match(...)` throws `TypeError` unless `query` is a string and `target` is a string or a valid `PreparedTarget`.
-- `search(...)` throws `TypeError` unless `query` is a string and `targets` is an array.
-- `searchBy(...)` throws `TypeError` unless `query` is a string, `values` is an array, and `extract` is a function.
-- `searchFields(...)` throws `TypeError` unless `query` is a string, `values` is an array, and `fields` is an array of valid field definitions.
+- The library does not perform general runtime type validation for arguments, collection elements, extractor return values, or helper inputs when those shapes are already covered by the published TypeScript signatures.
+- Passing values outside the published TypeScript contract is unsupported behavior. Implementations may throw ordinary JavaScript errors, fail later in execution, or produce unspecified results.
+- Runtime validation is reserved for semantic constraints that TypeScript cannot express precisely.
 - `searchFields(...)` throws `RangeError` if `fields.length === 0`.
-- `searchFields(...)` throws `RangeError` if any field key is not a non-empty string.
+- `searchFields(...)` throws `RangeError` if any field key is an empty string.
 - `searchFields(...)` throws `RangeError` if field keys are duplicated within one call.
 - `SearchOptions.limit`, when provided, must be an integer greater than or equal to `0`; otherwise the call throws `RangeError`.
 - `SearchOptions.threshold`, when provided, must be a finite number in the inclusive range `[0, 1]`; otherwise the call throws `RangeError`.
-- `search(...)` throws `TypeError` if any target element is not a string or `PreparedTarget`.
-- `searchBy(...)` and `searchFields(...)` throw `TypeError` if an extractor returns a value that is not a string, `PreparedTarget`, `null`, or `undefined`.
-- `segments(...)` and `highlight(...)` throw `TypeError` unless passed a valid `HighlightableMatch`.
 
 ### 2. Normalization
 
@@ -545,7 +540,7 @@ Behavior:
 
 ### Plain String Search
 
-1. Validate inputs.
+1. Apply runtime semantic checks defined by this blueprint.
 2. Normalize and tokenize the query.
 3. For each target:
    - obtain normalized target data from the raw string or prepared target
@@ -558,7 +553,7 @@ Behavior:
 
 ### `searchBy(...)`
 
-1. Validate inputs.
+1. Apply runtime semantic checks defined by this blueprint.
 2. Normalize and tokenize the query once.
 3. For each value:
    - run the extractor once
@@ -569,7 +564,7 @@ Behavior:
 
 ### `searchFields(...)`
 
-1. Validate inputs and field definitions.
+1. Apply runtime semantic checks defined by this blueprint.
 2. Normalize and tokenize the query once.
 3. For each value:
    - extract every field target
@@ -709,7 +704,7 @@ Testing requirements implied by this blueprint:
 - tie handling must preserve input order
 - range merging must be covered
 - `searchFields(...)` token assignment semantics must be covered
-- invalid option values must throw the documented error types
+- semantic constraint violations must throw the documented error types
 
 Observability:
 
